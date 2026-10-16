@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "sattva",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "f497e47f-5dde-4dfe-b589-6e7380f719fb",
       "migrations_dir": "drizzle"
     }
   ],
