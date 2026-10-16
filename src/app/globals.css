@@ -1,0 +1,157 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #17150f;
+  --color-ink-soft: #4b453a;
+  --color-sand: #f7f3ec;
+  --color-sand-deep: #ece4d6;
+  --color-clay: #b3562f;
+  --color-clay-soft: #d98d64;
+  --color-sage: #4f6f52;
+  --color-sage-soft: #7f9c82;
+  --font-display: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --radius-4xl: 2rem;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-sand);
+    color: var(--color-ink);
+  }
+  h1,
+  h2,
+  h3,
+  .display {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: var(--color-clay);
+    color: #fff;
+  }
+}
+
+@layer components {
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 9999px;
+    padding: 0.625rem 1.25rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.1;
+    transition:
+      background-color 0.18s ease,
+      color 0.18s ease,
+      transform 0.18s ease,
+      border-color 0.18s ease;
+    cursor: pointer;
+  }
+  .btn:active {
+    transform: translateY(1px);
+  }
+  .btn-primary {
+    background-color: var(--color-ink);
+    color: var(--color-sand);
+  }
+  .btn-primary:hover {
+    background-color: var(--color-clay);
+  }
+  .btn-outline {
+    border: 1px solid color-mix(in srgb, var(--color-ink) 22%, transparent);
+    color: var(--color-ink);
+    background: transparent;
+  }
+  .btn-outline:hover {
+    border-color: var(--color-ink);
+    background: #fff;
+  }
+  .btn-ghost {
+    color: var(--color-ink-soft);
+    padding: 0.375rem 0.75rem;
+  }
+  .btn-ghost:hover {
+    color: var(--color-clay);
+  }
+  .btn-sage {
+    background-color: var(--color-sage);
+    color: #fff;
+  }
+  .btn-sage:hover {
+    background-color: #3d5a40;
+  }
+  .btn-sm {
+    padding: 0.375rem 0.875rem;
+    font-size: 0.75rem;
+  }
+  .card {
+    background: #fff;
+    border: 1px solid color-mix(in srgb, var(--color-ink) 8%, transparent);
+    border-radius: 1.5rem;
+    box-shadow: 0 1px 2px rgb(23 21 15 / 0.04);
+  }
+  .field {
+    width: 100%;
+    border-radius: 0.875rem;
+    border: 1px solid color-mix(in srgb, var(--color-ink) 14%, transparent);
+    background: #fff;
+    padding: 0.55rem 0.8rem;
+    font-size: 0.875rem;
+    color: var(--color-ink);
+    outline: none;
+  }
+  .field:focus {
+    border-color: var(--color-sage);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-sage) 18%, transparent);
+  }
+  .label {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-ink-soft);
+    margin-bottom: 0.3rem;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border-radius: 9999px;
+    padding: 0.2rem 0.625rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .link-underline {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+  }
+}
+
+.grain {
+  background-image: radial-gradient(
+      circle at 15% 20%,
+      color-mix(in srgb, var(--color-sage) 14%, transparent),
+      transparent 45%
+    ),
+    radial-gradient(circle at 85% 10%, color-mix(in srgb, var(--color-clay) 12%, transparent), transparent 40%);
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .print-sheet {
+    box-shadow: none !important;
+    border: 1px solid #ddd !important;
+    border-radius: 0 !important;
+  }
+}
