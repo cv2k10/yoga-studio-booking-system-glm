@@ -1,7 +1,4 @@
-"use client";
-
-import { useActionState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode } from "@/lib/next";
 import type { ActionState } from "@/lib/actions";
 
 type Props = {
@@ -16,6 +13,11 @@ type Props = {
   resetOnSuccess?: boolean;
 };
 
+/**
+ * Posts to the action endpoint, which redirects back with the result as a
+ * flash message (rendered by the root layout). The inline script in the
+ * layout swaps in `pendingLabel` and handles `confirmText`.
+ */
 export function ActionForm({
   action,
   children,
@@ -24,40 +26,13 @@ export function ActionForm({
   className,
   submitClassName = "btn btn-primary",
   confirmText,
-  showMessage = true,
-  resetOnSuccess = false,
 }: Props) {
-  const [state, formAction, pending] = useActionState(action, null);
-
   return (
-    <form
-      action={formAction}
-      className={className}
-      onSubmit={(event) => {
-        if (confirmText && !window.confirm(confirmText)) event.preventDefault();
-      }}
-    >
+    <form action={action} className={className} data-confirm={confirmText}>
       {children}
-      <button type="submit" className={submitClassName} disabled={pending}>
-        {pending ? pendingLabel : submitLabel}
+      <button type="submit" className={submitClassName} data-pending={pendingLabel}>
+        {submitLabel}
       </button>
-      {showMessage && state ? (
-        <p
-          className={`mt-2 rounded-xl px-3 py-2 text-xs font-medium ${
-            state.ok
-              ? "bg-sage/12 text-sage"
-              : "bg-clay/12 text-clay"
-          }`}
-          role="status"
-        >
-          {state.message}
-        </p>
-      ) : null}
-      {resetOnSuccess && state?.ok ? <ResetOnNext /> : null}
     </form>
   );
-}
-
-function ResetOnNext() {
-  return null;
 }

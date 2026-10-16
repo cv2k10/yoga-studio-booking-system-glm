@@ -1,3 +1,43 @@
+import { getContext } from "hono/context-storage";
+import type { AppEnv } from "@/env";
+
+const DEFAULT_TZ = "Asia/Kuala_Lumpur";
+
+/**
+ * The studio's timezone. Workers run in UTC, so "today" and class start
+ * instants are computed in this zone rather than the runtime's local time.
+ */
+export function studioTimeZone(): string {
+  try {
+    return getContext<AppEnv>().env.STUDIO_TZ || DEFAULT_TZ;
+  } catch {
+    return DEFAULT_TZ;
+  }
+}
+
+/** Wall-clock parts of `instant` in the studio timezone. */
+function zonedParts(instant: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: studioTimeZone(),
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instant);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+    second: get("second"),
+  };
+}
+
 export const WEEKDAY_LABELS = [
   "Monday",
   "Tuesday",
@@ -28,7 +68,8 @@ export function parseISODate(iso: string): Date {
 }
 
 export function todayISO(): string {
-  return toISODate(new Date());
+  const { year, month, day } = zonedParts(new Date());
+  return `${year}-${`${month}`.padStart(2, "0")}-${`${day}`.padStart(2, "0")}`;
 }
 
 export function addDaysISO(iso: string, days: number): string {
@@ -93,10 +134,16 @@ export function formatRange(time: string, durationMinutes: number): string {
   return `${formatTime(time)} – ${formatTime(`${`${endH}`.padStart(2, "0")}:${`${endM}`.padStart(2, "0")}`)}`;
 }
 
+/** The instant a class starts, given its wall-clock date and time at the studio. */
 export function sessionDateTimeISO(sessionDate: string, startTime: string): Date {
   const [y, m, d] = sessionDate.split("-").map(Number);
   const [h, mi] = startTime.split(":").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1, h ?? 0, mi ?? 0, 0, 0);
+  const wallAsUTC = Date.UTC(y, (m ?? 1) - 1, d ?? 1, h ?? 0, mi ?? 0);
+  // Offset of the studio zone at (roughly) that moment; good enough except
+  // within an hour of a DST switch, which the default zone does not have.
+  const zoned = zonedParts(new Date(wallAsUTC));
+  const zonedAsUTC = Date.UTC(zoned.year, zoned.month - 1, zoned.day, zoned.hour, zoned.minute, zoned.second);
+  return new Date(wallAsUTC - (zonedAsUTC - wallAsUTC));
 }
 
 export function isPast(sessionDate: string, startTime: string): boolean {
@@ -115,6 +162,7 @@ export function formatDateTime(value: Date | string | null): string {
   if (!value) return "—";
   const date = typeof value === "string" ? new Date(value) : value;
   return date.toLocaleString("en-GB", {
+    timeZone: studioTimeZone(),
     day: "2-digit",
     month: "short",
     year: "numeric",

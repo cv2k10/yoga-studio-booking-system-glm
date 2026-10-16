@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/Link";
 import { getTeachers } from "@/lib/scheduling";
 import { SectionHeading } from "@/components/ui";
 

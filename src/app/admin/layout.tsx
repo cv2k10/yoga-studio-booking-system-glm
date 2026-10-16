@@ -1,5 +1,5 @@
-import Link from "next/link";
-import type { ReactNode } from "react";
+import Link from "@/components/Link";
+import type { ReactNode } from "@/lib/next";
 import { requireAdmin } from "@/lib/auth";
 
 const TABS = [

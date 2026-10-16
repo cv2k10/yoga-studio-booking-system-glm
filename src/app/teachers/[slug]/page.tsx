@@ -1,5 +1,5 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import Link from "@/components/Link";
+import { notFound } from "@/lib/next";
 import { getSessionsForTeacher, getTeacherBySlug } from "@/lib/scheduling";
 import { Breadcrumbs, Badge } from "@/components/ui";
 import { formatDateShort, formatRange, isPast, todayISO } from "@/lib/dates";

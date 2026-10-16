@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/Link";
 import { ActionForm } from "@/components/ActionForm";
 import { registerAction } from "@/app/actions/auth";
 

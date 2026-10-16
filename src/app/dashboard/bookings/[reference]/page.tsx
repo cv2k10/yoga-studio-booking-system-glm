@@ -1,5 +1,5 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import Link from "@/components/Link";
+import { notFound } from "@/lib/next";
 import QRCode from "qrcode";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -137,7 +137,7 @@ export default async function BookingProofPage({
 
           <aside className="flex flex-col items-center justify-start gap-3 rounded-2xl border border-ink/10 p-4">
             <div
-              className="h-40 w-40"
+              className="h-40 w-40 [&>svg]:h-full [&>svg]:w-full"
               aria-label={`QR code for booking ${row.booking.reference}`}
               dangerouslySetInnerHTML={{ __html: qrSvg }}
             />

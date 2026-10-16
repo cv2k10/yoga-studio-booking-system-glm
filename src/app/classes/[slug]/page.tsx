@@ -1,5 +1,5 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import Link from "@/components/Link";
+import { notFound } from "@/lib/next";
 import { getCurrentUser } from "@/lib/auth";
 import { and, asc, eq, gt } from "drizzle-orm";
 import { db } from "@/db";

@@ -13,6 +13,17 @@ import {
   voucherProducts,
   type SessionChange,
 } from "@/db/schema";
+import { addDaysISO, mondayIndex, parseISODate, startOfWeekISO, todayISO } from "@/lib/dates";
+
+// D1 allows at most 100 bound parameters per statement, so bulk inserts are
+// split into chunks and sent together in one batch (which is atomic).
+async function insertChunked<T>(rows: T[], perRow: number, insert: (chunk: T[]) => unknown): Promise<void> {
+  if (rows.length === 0) return;
+  const size = Math.max(1, Math.floor(99 / perRow));
+  const statements = [];
+  for (let i = 0; i < rows.length; i += size) statements.push(insert(rows.slice(i, i + size)));
+  await db.batch(statements as unknown as Parameters<typeof db.batch>[0]);
+}
 
 export type SessionView = {
   id: number;
@@ -89,12 +100,12 @@ function baseSelection(userId?: number) {
       ? sql<
           number | null
         >`(select b.id from ${bookings} b where b.session_id = ${classSessions.id} and b.user_id = ${userId} and b.status <> 'cancelled' limit 1)`
-      : sql<number | null>`null::integer`,
+      : sql<number | null>`null`,
     myBookingStatus: userId
       ? sql<
           string | null
         >`(select b.status from ${bookings} b where b.session_id = ${classSessions.id} and b.user_id = ${userId} and b.status <> 'cancelled' limit 1)`
-      : sql<string | null>`null::text`,
+      : sql<string | null>`null`,
   };
 }
 
@@ -102,9 +113,9 @@ function rowsToViews(rows: Awaited<ReturnType<typeof runSessionQuery>>): Session
   return rows.map((row) => ({ ...row }));
 }
 
-function runSessionQuery() {
+function runSessionQuery(userId?: number) {
   return db
-    .select(baseSelection())
+    .select(baseSelection(userId))
     .from(classSessions)
     .innerJoin(classTypes, eq(classSessions.classTypeId, classTypes.id))
     .innerJoin(teachers, eq(classSessions.teacherId, teachers.id))
@@ -116,7 +127,7 @@ export async function getSessionsBetween(
   toISO: string,
   userId?: number,
 ): Promise<SessionView[]> {
-  const rows = await runSessionQuery()
+  const rows = await runSessionQuery(userId)
     .where(and(gte(classSessions.sessionDate, fromISO), lte(classSessions.sessionDate, toISO)))
     .orderBy(asc(classSessions.sessionDate), asc(classSessions.startTime));
   return rowsToViews(rows);
@@ -126,11 +137,11 @@ export async function getWeekSessions(
   weekStartISO: string,
   userId?: number,
 ): Promise<SessionView[]> {
-  const rows = await runSessionQuery()
+  const rows = await runSessionQuery(userId)
     .where(
       and(
         gte(classSessions.sessionDate, weekStartISO),
-        lte(classSessions.sessionDate, addDaysLocal(weekStartISO, 6)),
+        lte(classSessions.sessionDate, addDaysISO(weekStartISO, 6)),
       ),
     )
     .orderBy(asc(classSessions.sessionDate), asc(classSessions.startTime));
@@ -138,7 +149,7 @@ export async function getWeekSessions(
 }
 
 export async function getSessionById(id: number, userId?: number): Promise<SessionView | null> {
-  const rows = await runSessionQuery().where(eq(classSessions.id, id)).limit(1);
+  const rows = await runSessionQuery(userId).where(eq(classSessions.id, id)).limit(1);
   return rows[0] ?? null;
 }
 
@@ -159,10 +170,10 @@ export async function getSessionsForRoom(roomId: number, fromISO: string): Promi
 }
 
 export async function getUpcomingSessions(limit = 6, userId?: number): Promise<SessionView[]> {
-  const rows = await runSessionQuery()
+  const rows = await runSessionQuery(userId)
     .where(
       and(
-        gte(classSessions.sessionDate, addDaysLocal(todayLocal(), 0)),
+        gte(classSessions.sessionDate, todayISO()),
         eq(classSessions.status, "scheduled"),
       ),
     )
@@ -171,19 +182,6 @@ export async function getUpcomingSessions(limit = 6, userId?: number): Promise<S
   return rowsToViews(rows);
 }
 
-function addDaysLocal(iso: string, days: number): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1, 12);
-  date.setDate(date.getDate() + days);
-  const pad = (n: number) => `${n}`.padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function todayLocal(): string {
-  const date = new Date();
-  const pad = (n: number) => `${n}`.padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
 
 /* ------------------------------------------------------------------ */
 /* Horizon generation                                                  */
@@ -198,8 +196,8 @@ export async function ensureSessionHorizon(): Promise<void> {
   const templates = await db.select().from(classTemplates).where(eq(classTemplates.isPublished, true));
   if (templates.length === 0) return;
 
-  const today = todayLocal();
-  const horizonEnd = addDaysLocal(today, HORIZON_WEEKS * 7);
+  const today = todayISO();
+  const horizonEnd = addDaysISO(today, HORIZON_WEEKS * 7);
   const existing = await db
     .select({ templateId: classSessions.templateId, sessionDate: classSessions.sessionDate })
     .from(classSessions)
@@ -212,15 +210,9 @@ export async function ensureSessionHorizon(): Promise<void> {
   for (const template of templates) {
     for (let week = 0; week <= HORIZON_WEEKS; week += 1) {
       for (let day = 0; day < 7; day += 1) {
-        const cursor = addDaysLocal(startOfWeekLocal(today), week * 7 + day);
+        const cursor = addDaysISO(startOfWeekISO(today), week * 7 + day);
         if (cursor < today || cursor > horizonEnd) continue;
-        const jsDow = new Date(
-          Number(cursor.slice(0, 4)),
-          Number(cursor.slice(5, 7)) - 1,
-          Number(cursor.slice(8, 10)),
-          12,
-        ).getDay();
-        const dow = jsDow === 0 ? 7 : jsDow;
+        const dow = mondayIndex(parseISODate(cursor).getDay());
         if (dow !== template.dayOfWeek) continue;
         const key = `${template.id}|${cursor}`;
         if (keys.has(key)) continue;
@@ -240,28 +232,12 @@ export async function ensureSessionHorizon(): Promise<void> {
     }
   }
 
-  if (values.length > 0) {
-    await db.insert(classSessions).values(values).onConflictDoNothing();
-  }
+  await insertChunked(values, 13, (chunk) => db.insert(classSessions).values(chunk).onConflictDoNothing());
 }
 
-function startOfWeekLocal(iso: string): string {
-  const [y, m, d] = iso.split("-").map(Number);
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1, 12);
-  const jsDow = date.getDay();
-  const shift = (jsDow === 0 ? 7 : jsDow) - 1;
-  date.setDate(date.getDate() - shift);
-  const pad = (n: number) => `${n}`.padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
 
-function dayOffsetFromMonday(iso: string): number {
-  const [y, m, d] = iso.split("-").map(Number);
-  const jsDow = new Date(y, (m ?? 1) - 1, d ?? 1, 12).getDay();
-  return jsDow === 0 ? 7 : jsDow;
-}
-
-export type RebuildResult = { updated: number; cancelled: number; created: number; deleted: number };
+/** `flagged`: booked classes left unchanged; their members were notified instead. */
+export type RebuildResult = { updated: number; flagged: number; created: number; deleted: number };
 
 /**
  * Pushes template edits into the future. Only sessions without active
@@ -269,12 +245,12 @@ export type RebuildResult = { updated: number; cancelled: number; created: numbe
  * notified instead.
  */
 export async function rebuildFutureSessions(actorName: string): Promise<RebuildResult> {
-  const today = todayLocal();
-  const horizonEnd = addDaysLocal(today, HORIZON_WEEKS * 7);
+  const today = todayISO();
+  const horizonEnd = addDaysISO(today, HORIZON_WEEKS * 7);
   const templates = await db.select().from(classTemplates);
   const byId = new Map(templates.map((t) => [t.id, t]));
 
-  const result: RebuildResult = { updated: 0, cancelled: 0, created: 0, deleted: 0 };
+  const result: RebuildResult = { updated: 0, flagged: 0, created: 0, deleted: 0 };
 
   const future = await db
     .select({
@@ -300,7 +276,7 @@ export async function rebuildFutureSessions(actorName: string): Promise<RebuildR
       continue;
     }
 
-    const sessionDow = dayOffsetFromMonday(session.sessionDate);
+    const sessionDow = mondayIndex(parseISODate(session.sessionDate).getDay());
     const dayChanged = sessionDow !== template.dayOfWeek;
     const shapeChanged =
       session.classTypeId !== template.classTypeId ||
@@ -321,7 +297,7 @@ export async function rebuildFutureSessions(actorName: string): Promise<RebuildR
         note: "This class is part of the updated weekly timetable.",
         actorName,
       });
-      result.cancelled += 1;
+      result.flagged += 1;
       continue;
     }
 
@@ -345,12 +321,16 @@ export async function rebuildFutureSessions(actorName: string): Promise<RebuildR
     result.updated += 1;
   }
 
+  const countInWindow = async () => {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)`.mapWith(Number) })
+      .from(classSessions)
+      .where(and(gte(classSessions.sessionDate, today), lte(classSessions.sessionDate, horizonEnd)));
+    return row?.count ?? 0;
+  };
+  const before = await countInWindow();
   await ensureSessionHorizon();
-  const createdRows = await db
-    .select({ count: sql<number>`count(*)`.mapWith(Number) })
-    .from(classSessions)
-    .where(and(gte(classSessions.sessionDate, today), lte(classSessions.sessionDate, horizonEnd)));
-  result.created = createdRows[0]?.count ?? 0;
+  result.created = (await countInWindow()) - before;
   return result;
 }
 
@@ -400,7 +380,7 @@ export async function notifySessionChange(input: {
   );
   if (recipients.length === 0) return;
 
-  await db.insert(notifications).values(
+  await insertChunked(
     recipients.map((userId) => ({
       userId,
       type: "change",
@@ -415,6 +395,8 @@ export async function notifySessionChange(input: {
       sessionId: input.sessionId,
       actionHref: "/dashboard",
     })),
+    10,
+    (chunk) => db.insert(notifications).values(chunk),
   );
 }
 
@@ -424,7 +406,7 @@ export async function notifyMany(
 ): Promise<number> {
   const unique = [...new Set(userIds)];
   if (unique.length === 0) return 0;
-  await db.insert(notifications).values(
+  await insertChunked(
     unique.map((userId) => ({
       userId,
       type: payload.type,
@@ -432,6 +414,8 @@ export async function notifyMany(
       body: payload.body,
       actionHref: payload.actionHref ?? null,
     })),
+    10,
+    (chunk) => db.insert(notifications).values(chunk),
   );
   return unique.length;
 }
@@ -519,7 +503,7 @@ export async function getClassTypeCounts(): Promise<Record<number, number>> {
     .select({ classTypeId: classTypes.id, count: sql<number>`count(*)`.mapWith(Number) })
     .from(classSessions)
     .innerJoin(classTypes, eq(classSessions.classTypeId, classTypes.id))
-    .where(and(gte(classSessions.sessionDate, todayLocal()), eq(classSessions.status, "scheduled")))
+    .where(and(gte(classSessions.sessionDate, todayISO()), eq(classSessions.status, "scheduled")))
     .groupBy(classTypes.id);
   return Object.fromEntries(rows.map((r) => [r.classTypeId, r.count]));
 }
@@ -542,7 +526,7 @@ export async function getSessionBookingList(sessionId: number) {
 
 export async function getSessionsByIds(ids: number[], userId?: number) {
   if (ids.length === 0) return [];
-  const rows = await runSessionQuery().where(inArray(classSessions.id, ids));
+  const rows = await runSessionQuery(userId).where(inArray(classSessions.id, ids));
   return rowsToViews(rows);
 }
 

@@ -1,10 +1,9 @@
 "use server";
 
-import { randomBytes } from "node:crypto";
-import { and, asc, eq, gt, ne } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
-import { db } from "@/db";
-import { bookings, notifications, payments, vouchers, voucherProducts } from "@/db/schema";
+import { and, asc, eq, gt, ne, sql } from "drizzle-orm";
+import { revalidatePath } from "@/lib/next";
+import { db, runBatch } from "@/db";
+import { bookings, classSessions, notifications, payments, vouchers, voucherProducts } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
 import { fail, ok, type ActionState } from "@/lib/actions";
 import { addDaysISO, formatMoney, hoursUntil, isPast, todayISO } from "@/lib/dates";
@@ -13,7 +12,9 @@ import { getSessionById } from "@/lib/scheduling";
 const CANCELLATION_WINDOW_HOURS = 4;
 
 function reference(prefix: string): string {
-  return `${prefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${prefix}-${hex.toUpperCase()}`;
 }
 
 function str(data: FormData, key: string): string {
@@ -60,22 +61,46 @@ export async function bookClassAction(_prev: ActionState, data: FormData): Promi
     return fail("You need class credits to book. Purchase a class voucher first.");
   }
 
-  const [booking] = await db
-    .insert(bookings)
-    .values({
-      reference: reference("SAT"),
-      userId: user.id,
-      sessionId,
-      voucherId: voucher.id,
-      status: "confirmed",
-    })
-    .returning();
+  // D1 has no interactive transactions. The batch runs atomically, and each
+  // statement re-checks its precondition so concurrent requests cannot
+  // overfill the class or spend the same credit twice. The partial unique
+  // index on (user_id, session_id) rejects a second active booking.
+  const bookingRef = reference("SAT");
+  const today = todayISO();
+  let inserted: D1Result;
+  try {
+    [inserted] = (await runBatch([
+      sql`
+        insert into ${bookings} (reference, user_id, session_id, voucher_id, status, credits_used)
+        select ${bookingRef}, ${user.id}, ${sessionId}, ${voucher.id}, 'confirmed', 1
+        where (
+          select count(*) from ${bookings}
+          where session_id = ${sessionId} and status <> 'cancelled'
+        ) < (select capacity from ${classSessions} where id = ${sessionId} and status = 'scheduled')
+          and exists (
+            select 1 from ${vouchers}
+            where id = ${voucher.id} and status = 'active' and credits_remaining > 0 and expires_at > ${today}
+          )
+      `,
+      sql`
+        update ${vouchers}
+        set credits_remaining = credits_remaining - 1,
+            status = case when credits_remaining - 1 <= 0 then 'depleted' else 'active' end
+        where id = ${voucher.id}
+          and exists (select 1 from ${bookings} where reference = ${bookingRef})
+      `,
+    ])) as [D1Result, D1Result];
+  } catch (error) {
+    if (`${error}`.includes("UNIQUE")) return fail("You already have a spot in this class.");
+    throw error;
+  }
+  if (!inserted.meta.changes) {
+    return fail("This class just filled up or your voucher has no credits left. Please refresh and try again.");
+  }
 
-  const remaining = voucher.creditsRemaining - 1;
-  await db
-    .update(vouchers)
-    .set({ creditsRemaining: remaining, status: remaining <= 0 ? "depleted" : "active" })
-    .where(eq(vouchers.id, voucher.id));
+  const [booking] = await db.select().from(bookings).where(eq(bookings.reference, bookingRef)).limit(1);
+  const [updatedVoucher] = await db.select().from(vouchers).where(eq(vouchers.id, voucher.id)).limit(1);
+  const remaining = updatedVoucher?.creditsRemaining ?? voucher.creditsRemaining - 1;
 
   await db.insert(notifications).values({
     userId: user.id,
@@ -117,27 +142,22 @@ export async function cancelBookingAction(_prev: ActionState, data: FormData): P
     );
   }
 
-  await db
-    .update(bookings)
-    .set({ status: "cancelled", cancelledAt: new Date() })
-    .where(eq(bookings.id, booking.id));
-
-  if (booking.voucherId) {
-    const [voucher] = await db
-      .select()
-      .from(vouchers)
-      .where(eq(vouchers.id, booking.voucherId))
-      .limit(1);
-    if (voucher && voucher.status !== "expired") {
-      await db
-        .update(vouchers)
-        .set({
-          creditsRemaining: voucher.creditsRemaining + booking.creditsUsed,
-          status: "active",
-        })
-        .where(eq(vouchers.id, voucher.id));
-    }
-  }
+  // Refund and cancel in one atomic batch. The refund only applies while the
+  // booking is still confirmed, so a double submit cannot refund twice.
+  const [, cancelled] = (await runBatch([
+    sql`
+      update ${vouchers}
+      set credits_remaining = min(credits_total, credits_remaining + ${booking.creditsUsed}),
+          status = 'active'
+      where id = ${booking.voucherId ?? 0} and status <> 'expired'
+        and exists (select 1 from ${bookings} where id = ${booking.id} and status = 'confirmed')
+    `,
+    sql`
+      update ${bookings} set status = 'cancelled', cancelled_at = unixepoch()
+      where id = ${booking.id} and status = 'confirmed'
+    `,
+  ])) as [D1Result, D1Result];
+  if (!cancelled.meta.changes) return fail("This booking is no longer active.");
 
   await db.insert(notifications).values({
     userId: user.id,

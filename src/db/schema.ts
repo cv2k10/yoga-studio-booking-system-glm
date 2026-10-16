@@ -1,28 +1,25 @@
-import {
-  boolean,
-  date,
-  integer,
-  pgTable,
-  serial,
-  text,
-  timestamp,
-  uniqueIndex,
-} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+const id = () => integer("id").primaryKey({ autoIncrement: true });
+const bool = (name: string) => integer(name, { mode: "boolean" });
+const timestamp = (name: string) => integer(name, { mode: "timestamp" });
+const createdAt = () => timestamp("created_at").notNull().default(sql`(unixepoch())`);
 
 /* ------------------------------------------------------------------ */
 /* Members + staff accounts                                            */
 /* ------------------------------------------------------------------ */
-export const users = pgTable(
+export const users = sqliteTable(
   "users",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     name: text("name").notNull(),
     email: text("email").notNull(),
     phone: text("phone"),
     passwordHash: text("password_hash").notNull(),
     role: text("role").notNull().default("member"), // member | admin
-    isActive: boolean("is_active").notNull().default(true),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    isActive: bool("is_active").notNull().default(true),
+    createdAt: createdAt(),
   },
   (table) => [uniqueIndex("users_email_unique").on(table.email)],
 );
@@ -30,10 +27,10 @@ export const users = pgTable(
 /* ------------------------------------------------------------------ */
 /* Studio resources                                                    */
 /* ------------------------------------------------------------------ */
-export const teachers = pgTable(
+export const teachers = sqliteTable(
   "teachers",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     title: text("title").notNull(),
@@ -43,15 +40,15 @@ export const teachers = pgTable(
     certifications: text("certifications").notNull().default(""),
     yearsExperience: integer("years_experience").notNull().default(1),
     instagram: text("instagram"),
-    isActive: boolean("is_active").notNull().default(true),
+    isActive: bool("is_active").notNull().default(true),
   },
   (table) => [uniqueIndex("teachers_slug_unique").on(table.slug)],
 );
 
-export const rooms = pgTable(
+export const rooms = sqliteTable(
   "rooms",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     viewName: text("view_name").notNull(),
@@ -60,15 +57,15 @@ export const rooms = pgTable(
     capacity: integer("capacity").notNull().default(14),
     floor: text("floor").notNull().default("Ground floor"),
     amenities: text("amenities").notNull().default(""),
-    isActive: boolean("is_active").notNull().default(true),
+    isActive: bool("is_active").notNull().default(true),
   },
   (table) => [uniqueIndex("rooms_slug_unique").on(table.slug)],
 );
 
-export const classTypes = pgTable(
+export const classTypes = sqliteTable(
   "class_types",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     slug: text("slug").notNull(),
     name: text("name").notNull(),
     category: text("category").notNull().default("yoga"), // yoga | pilates | meditation
@@ -77,7 +74,7 @@ export const classTypes = pgTable(
     tagline: text("tagline").notNull(),
     description: text("description").notNull(),
     accent: text("accent").notNull().default("emerald"),
-    isActive: boolean("is_active").notNull().default(true),
+    isActive: bool("is_active").notNull().default(true),
   },
   (table) => [uniqueIndex("class_types_slug_unique").on(table.slug)],
 );
@@ -85,8 +82,8 @@ export const classTypes = pgTable(
 /* ------------------------------------------------------------------ */
 /* Weekly timetable                                                    */
 /* ------------------------------------------------------------------ */
-export const classTemplates = pgTable("class_templates", {
-  id: serial("id").primaryKey(),
+export const classTemplates = sqliteTable("class_templates", {
+  id: id(),
   classTypeId: integer("class_type_id")
     .notNull()
     .references(() => classTypes.id, { onDelete: "cascade" }),
@@ -100,15 +97,15 @@ export const classTemplates = pgTable("class_templates", {
   startTime: text("start_time").notNull(), // "07:00"
   durationMinutes: integer("duration_minutes").notNull().default(60),
   capacity: integer("capacity").notNull().default(12),
-  isPublished: boolean("is_published").notNull().default(true),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  isPublished: bool("is_published").notNull().default(true),
+  createdAt: createdAt(),
 });
 
 /* Materialised occurrences: recurring slots + admin-added one-off classes */
-export const classSessions = pgTable(
+export const classSessions = sqliteTable(
   "class_sessions",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     templateId: integer("template_id").references(() => classTemplates.id, {
       onDelete: "set null",
     }),
@@ -121,23 +118,24 @@ export const classSessions = pgTable(
     roomId: integer("room_id")
       .notNull()
       .references(() => rooms.id, { onDelete: "cascade" }),
-    sessionDate: date("session_date", { mode: "string" }).notNull(),
+    sessionDate: text("session_date").notNull(),
     startTime: text("start_time").notNull(),
     durationMinutes: integer("duration_minutes").notNull().default(60),
     capacity: integer("capacity").notNull().default(12),
-    isExtra: boolean("is_extra").notNull().default(false),
+    isExtra: bool("is_extra").notNull().default(false),
     status: text("status").notNull().default("scheduled"), // scheduled | cancelled
     note: text("note"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: createdAt(),
   },
   (table) => [
     uniqueIndex("class_sessions_template_date_unique").on(table.templateId, table.sessionDate),
+    index("class_sessions_date_idx").on(table.sessionDate),
   ],
 );
 
 /** Audit trail for every change made to a scheduled class. */
-export const sessionChanges = pgTable("session_changes", {
-  id: serial("id").primaryKey(),
+export const sessionChanges = sqliteTable("session_changes", {
+  id: id(),
   sessionId: integer("session_id")
     .notNull()
     .references(() => classSessions.id, { onDelete: "cascade" }),
@@ -147,28 +145,28 @@ export const sessionChanges = pgTable("session_changes", {
   newValue: text("new_value"),
   note: text("note"),
   actorName: text("actor_name").notNull().default("Studio admin"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: createdAt(),
 });
 
 /* ------------------------------------------------------------------ */
 /* Vouchers (class credit packs)                                       */
 /* ------------------------------------------------------------------ */
-export const voucherProducts = pgTable("voucher_products", {
-  id: serial("id").primaryKey(),
+export const voucherProducts = sqliteTable("voucher_products", {
+  id: id(),
   name: text("name").notNull(),
   classCount: integer("class_count").notNull(),
   priceCents: integer("price_cents").notNull(),
   validityDays: integer("validity_days").notNull().default(180),
   description: text("description").notNull().default(""),
   perks: text("perks").notNull().default(""),
-  isFeatured: boolean("is_featured").notNull().default(false),
-  isActive: boolean("is_active").notNull().default(true),
+  isFeatured: bool("is_featured").notNull().default(false),
+  isActive: bool("is_active").notNull().default(true),
 });
 
-export const vouchers = pgTable(
+export const vouchers = sqliteTable(
   "vouchers",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     code: text("code").notNull(),
     userId: integer("user_id")
       .notNull()
@@ -180,15 +178,15 @@ export const vouchers = pgTable(
     creditsTotal: integer("credits_total").notNull(),
     creditsRemaining: integer("credits_remaining").notNull(),
     priceCents: integer("price_cents").notNull(),
-    purchasedAt: timestamp("purchased_at", { withTimezone: true }).notNull().defaultNow(),
-    expiresAt: date("expires_at", { mode: "string" }).notNull(),
+    purchasedAt: timestamp("purchased_at").notNull().default(sql`(unixepoch())`),
+    expiresAt: text("expires_at").notNull(),
     status: text("status").notNull().default("active"), // active | depleted | expired
   },
   (table) => [uniqueIndex("vouchers_code_unique").on(table.code)],
 );
 
-export const payments = pgTable("payments", {
-  id: serial("id").primaryKey(),
+export const payments = sqliteTable("payments", {
+  id: id(),
   userId: integer("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
@@ -197,16 +195,16 @@ export const payments = pgTable("payments", {
   amountCents: integer("amount_cents").notNull(),
   method: text("method").notNull().default("card"),
   status: text("status").notNull().default("paid"),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: createdAt(),
 });
 
 /* ------------------------------------------------------------------ */
 /* Bookings                                                            */
 /* ------------------------------------------------------------------ */
-export const bookings = pgTable(
+export const bookings = sqliteTable(
   "bookings",
   {
-    id: serial("id").primaryKey(),
+    id: id(),
     reference: text("reference").notNull(),
     userId: integer("user_id")
       .notNull()
@@ -217,27 +215,38 @@ export const bookings = pgTable(
     voucherId: integer("voucher_id").references(() => vouchers.id, { onDelete: "set null" }),
     status: text("status").notNull().default("confirmed"), // confirmed | cancelled | attended | no_show
     creditsUsed: integer("credits_used").notNull().default(1),
-    checkedInAt: timestamp("checked_in_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    checkedInAt: timestamp("checked_in_at"),
+    createdAt: createdAt(),
+    cancelledAt: timestamp("cancelled_at"),
   },
-  (table) => [uniqueIndex("bookings_reference_unique").on(table.reference)],
+  (table) => [
+    uniqueIndex("bookings_reference_unique").on(table.reference),
+    // One active booking per member per class: blocks double-booking at the DB level.
+    uniqueIndex("bookings_user_session_active_unique")
+      .on(table.userId, table.sessionId)
+      .where(sql`status <> 'cancelled'`),
+    index("bookings_session_idx").on(table.sessionId),
+  ],
 );
 
-export const notifications = pgTable("notifications", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  type: text("type").notNull().default("info"), // info | booking | change | voucher
-  title: text("title").notNull(),
-  body: text("body").notNull(),
-  sessionId: integer("session_id").references(() => classSessions.id, { onDelete: "cascade" }),
-  bookingId: integer("booking_id").references(() => bookings.id, { onDelete: "cascade" }),
-  actionHref: text("action_href"),
-  isRead: boolean("is_read").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: id(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull().default("info"), // info | booking | change | voucher
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    sessionId: integer("session_id").references(() => classSessions.id, { onDelete: "cascade" }),
+    bookingId: integer("booking_id").references(() => bookings.id, { onDelete: "cascade" }),
+    actionHref: text("action_href"),
+    isRead: bool("is_read").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (table) => [index("notifications_user_read_idx").on(table.userId, table.isRead)],
+);
 
 export type User = typeof users.$inferSelect;
 export type Teacher = typeof teachers.$inferSelect;

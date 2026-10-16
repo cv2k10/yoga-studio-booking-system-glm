@@ -3,17 +3,45 @@
  * timetable, materialised sessions, members, vouchers, bookings and demo
  * schedule changes + notifications.
  *
- * Run with: node --env-file=.env scripts/seed.mjs
+ * The seed runs against an in-memory SQLite copy of the D1 schema (built from
+ * the drizzle migrations), then writes every row out as scripts/seed.sql for
+ * `wrangler d1 execute`. Run with: npm run db:seed
  */
-import { randomBytes, scryptSync } from "node:crypto";
-import { Client } from "pg";
+import { pbkdf2Sync, randomBytes } from "node:crypto";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 
-const connectionString =
-  process.env.DATABASE_URL ?? "postgresql://postgres:postgres@127.0.0.1:5432/app_db";
+const root = new URL("../", import.meta.url);
+const sqlite = new DatabaseSync(":memory:");
+for (const file of readdirSync(new URL("drizzle/", root)).filter((f) => f.endsWith(".sql")).sort()) {
+  sqlite.exec(readFileSync(new URL(`drizzle/${file}`, root), "utf8").replaceAll("--> statement-breakpoint", ""));
+}
 
+/** pg-style client over node:sqlite, so the seed below reads like before. */
+const toSqliteValue = (value) => {
+  if (value instanceof Date) return Math.floor(value.getTime() / 1000);
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return value ?? null;
+};
+const client = {
+  async query(text, params = []) {
+    const statement = text
+      .replace(/\$(\d+)/g, "?$1")
+      .replace(/now\(\) - interval '(\d+) days'/g, "(unixepoch() - $1 * 86400)")
+      .replace(/now\(\)/g, "unixepoch()");
+    const prepared = sqlite.prepare(statement);
+    const args = params.map(toSqliteValue);
+    if (/^\s*select|returning/i.test(statement)) return { rows: prepared.all(...args) };
+    prepared.run(...args);
+    return { rows: [] };
+  },
+};
+
+// Matches src/lib/auth.ts: pbkdf2$<iterations>$<salt hex>$<hash hex>
 const hash = (password) => {
-  const salt = randomBytes(16).toString("hex");
-  return `${salt}:${scryptSync(password, salt, 64).toString("hex")}`;
+  const salt = randomBytes(16);
+  const derived = pbkdf2Sync(password, salt, 100_000, 32, "sha256");
+  return `pbkdf2$100000$${salt.toString("hex")}$${derived.toString("hex")}`;
 };
 
 const iso = (date) => {
@@ -33,15 +61,6 @@ const dowOf = (date) => (date.getDay() === 0 ? 7 : date.getDay());
 const ref = (prefix, n) =>
   `${prefix}-${randomBytes(3).toString("hex").toUpperCase()}${`${n}`.padStart(2, "0")}`;
 
-const client = new Client({ connectionString });
-await client.connect();
-
-await client.query(`
-  truncate table notifications, session_changes, payments, bookings, vouchers,
-    voucher_products, class_sessions, class_templates, class_types, rooms,
-    teachers, users restart identity cascade
-`);
-
 /* ---------------------------------- users --------------------------------- */
 const users = [
   ["Studio Admin", "admin@sattva.fit", "+60 12 200 8891", "admin"],
@@ -58,11 +77,12 @@ const users = [
   ["Camila Rosa", "camila@sattva.fit", "+60 18 552 3307", "member"],
 ];
 
+const demoPasswordHash = hash("studio123");
 const userIds = {};
 for (const [name, email, phone, role] of users) {
   const { rows } = await client.query(
     `insert into users (name, email, phone, password_hash, role) values ($1,$2,$3,$4,$5) returning id`,
-    [name, email, phone, hash("studio123"), role],
+    [name, email, phone, demoPasswordHash, role],
   );
   userIds[email] = rows[0].id;
 }
@@ -533,15 +553,28 @@ await client.query(
   [mayaId],
 );
 
-const { rows: summary } = await client.query(
-  `select
-     (select count(*) from users) as users,
-     (select count(*) from class_templates) as templates,
-     (select count(*) from class_sessions) as sessions,
-     (select count(*) from bookings) as bookings,
-     (select count(*) from vouchers) as vouchers,
-     (select count(*) from notifications) as notifications`,
-);
+/* ------------------------------ write seed.sql ----------------------------- */
+// Parents before children, so the inserts satisfy foreign keys.
+const TABLES = [
+  "users", "teachers", "rooms", "class_types", "class_templates", "class_sessions",
+  "session_changes", "voucher_products", "vouchers", "payments", "bookings", "notifications",
+];
+const literal = (value) =>
+  value === null ? "NULL" : typeof value === "string" ? `'${value.replaceAll("'", "''")}'` : String(value);
 
-console.log("Seed complete:", summary[0]);
-await client.end();
+const lines = ["PRAGMA defer_foreign_keys = true;"];
+for (const table of [...TABLES].reverse()) lines.push(`DELETE FROM ${table};`);
+lines.push("DELETE FROM sqlite_sequence;");
+const summary = {};
+for (const table of TABLES) {
+  const rows = sqlite.prepare(`select * from ${table}`).all();
+  summary[table] = rows.length;
+  for (const row of rows) {
+    const columns = Object.keys(row);
+    lines.push(
+      `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map((c) => literal(row[c])).join(", ")});`,
+    );
+  }
+}
+writeFileSync(new URL("scripts/seed.sql", root), `${lines.join("\n")}\n`);
+console.log("Seed written to scripts/seed.sql:", summary);

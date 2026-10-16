@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/Link";
 import { asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { bookings, classSessions, classTypes, teachers, users, vouchers } from "@/db/schema";

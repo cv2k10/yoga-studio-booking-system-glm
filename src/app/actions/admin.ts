@@ -1,8 +1,8 @@
 "use server";
 
 import { and, eq, gte, ne, or, sql } from "drizzle-orm";
-import { revalidatePath } from "next/cache";
-import { db } from "@/db";
+import { revalidatePath } from "@/lib/next";
+import { db, runBatch } from "@/db";
 import {
   bookings,
   classSessions,
@@ -29,8 +29,10 @@ import {
 function str(data: FormData, key: string): string {
   return `${data.get(key) ?? ""}`.trim();
 }
-function num(data: FormData, key: string): number {
-  return Number(data.get(key) ?? 0);
+/** Integer form field; blank or non-numeric input reads as 0. */
+function num(data: FormData, key: string, max = 1_000_000): number {
+  const value = Math.trunc(Number(data.get(key) ?? 0));
+  return Number.isFinite(value) ? Math.min(Math.max(value, 0), max) : 0;
 }
 
 async function adminName(): Promise<string> {
@@ -57,13 +59,14 @@ export async function saveTemplateAction(_prev: ActionState, data: FormData): Pr
     roomId: num(data, "roomId"),
     dayOfWeek: num(data, "dayOfWeek"),
     startTime: str(data, "startTime"),
-    durationMinutes: num(data, "durationMinutes") || 60,
-    capacity: num(data, "capacity") || 12,
+    durationMinutes: num(data, "durationMinutes", 240) || 60,
+    capacity: num(data, "capacity", 100) || 12,
     isPublished: str(data, "isPublished") === "on",
   };
   if (!payload.classTypeId || !payload.teacherId || !payload.roomId) {
     return fail("Select a class type, teacher and studio room.");
   }
+  if (payload.dayOfWeek < 1 || payload.dayOfWeek > 7) return fail("Choose a day of the week.");
   if (!/^\d{2}:\d{2}$/.test(payload.startTime)) return fail("Enter a start time such as 07:00.");
 
   if (id) {
@@ -105,9 +108,10 @@ export async function updateSessionAction(_prev: ActionState, data: FormData): P
   const teacherId = num(data, "teacherId");
   const roomId = num(data, "roomId");
   const startTime = str(data, "startTime");
-  const durationMinutes = num(data, "durationMinutes") || session.durationMinutes;
-  const capacity = num(data, "capacity") || session.capacity;
+  const durationMinutes = num(data, "durationMinutes", 240) || session.durationMinutes;
+  const capacity = num(data, "capacity", 100) || session.capacity;
   const note = str(data, "note");
+  if (!/^\d{2}:\d{2}$/.test(startTime)) return fail("Enter a start time such as 07:00.");
 
   const [teacher] = await db.select().from(teachers).where(eq(teachers.id, teacherId)).limit(1);
   const [room] = await db.select().from(rooms).where(eq(rooms.id, roomId)).limit(1);
@@ -208,35 +212,31 @@ export async function cancelSessionAction(_prev: ActionState, data: FormData): P
     actorName: actor,
   });
 
-  // Refund credits for cancelled class.
-  const affected = await db
-    .select({ id: bookings.id, userId: bookings.userId, voucherId: bookings.voucherId })
-    .from(bookings)
-    .where(and(eq(bookings.sessionId, sessionId), eq(bookings.status, "confirmed")));
-
-  for (const booking of affected) {
-    await db
-      .update(bookings)
-      .set({ status: "cancelled", cancelledAt: new Date() })
-      .where(eq(bookings.id, booking.id));
-    if (booking.voucherId) {
-      const [voucher] = await db
-        .select()
-        .from(vouchers)
-        .where(eq(vouchers.id, booking.voucherId))
-        .limit(1);
-      if (voucher && voucher.status !== "expired") {
-        const credits = Math.min(voucher.creditsTotal, voucher.creditsRemaining + 1);
-        await db
-          .update(vouchers)
-          .set({ creditsRemaining: credits, status: "active" })
-          .where(eq(vouchers.id, voucher.id));
-      }
-    }
-  }
+  // Refund and cancel every confirmed booking in one atomic batch. Each
+  // voucher gets back the credits its bookings used, capped at its total.
+  const [, cancelled] = (await runBatch([
+    sql`
+      update ${vouchers}
+      set credits_remaining = min(
+            credits_total,
+            credits_remaining + (
+              select coalesce(sum(b.credits_used), 0) from ${bookings} b
+              where b.voucher_id = ${vouchers.id} and b.session_id = ${sessionId} and b.status = 'confirmed'
+            )
+          ),
+          status = 'active'
+      where status <> 'expired'
+        and id in (select voucher_id from ${bookings} where session_id = ${sessionId} and status = 'confirmed')
+    `,
+    sql`
+      update ${bookings} set status = 'cancelled', cancelled_at = unixepoch()
+      where session_id = ${sessionId} and status = 'confirmed'
+    `,
+  ])) as [D1Result, D1Result];
+  const refunded = cancelled.meta.changes ?? 0;
 
   refreshAll();
-  return ok(`Class cancelled. ${affected.length} booking(s) refunded and members notified.`);
+  return ok(`Class cancelled. ${refunded} booking(s) refunded and members notified.`);
 }
 
 export async function reinstateSessionAction(_prev: ActionState, data: FormData): Promise<ActionState> {
@@ -250,7 +250,7 @@ export async function reinstateSessionAction(_prev: ActionState, data: FormData)
     label: `Class back on · ${session.sessionDate}`,
     oldValue: "Cancelled",
     newValue: `${formatTime(session.startTime)} · ${session.durationMinutes} min`,
-    note: "The class is running again. Your booking is active.",
+    note: "The class is running again. Bookings were released when it was cancelled, so please book again from the timetable.",
   });
   refreshAll();
   return ok("Class reinstated.");
@@ -264,8 +264,8 @@ export async function addExtraClassAction(_prev: ActionState, data: FormData): P
     roomId: num(data, "roomId"),
     sessionDate: str(data, "sessionDate"),
     startTime: str(data, "startTime"),
-    durationMinutes: num(data, "durationMinutes") || 60,
-    capacity: num(data, "capacity") || 12,
+    durationMinutes: num(data, "durationMinutes", 240) || 60,
+    capacity: num(data, "capacity", 100) || 12,
     note: str(data, "note") || null,
     isExtra: true,
   };
@@ -304,10 +304,12 @@ export async function setAttendanceAction(_prev: ActionState, data: FormData): P
   const bookingId = num(data, "bookingId");
   const status = str(data, "status");
   if (!["attended", "no_show", "confirmed"].includes(status)) return fail("Unknown status.");
-  await db
+  const [updated] = await db
     .update(bookings)
     .set({ status, checkedInAt: status === "attended" ? new Date() : null })
-    .where(eq(bookings.id, bookingId));
+    .where(and(eq(bookings.id, bookingId), ne(bookings.status, "cancelled")))
+    .returning({ id: bookings.id });
+  if (!updated) return fail("Booking not found or already cancelled.");
   revalidatePath("/admin/bookings");
   return ok("Attendance updated.");
 }
@@ -394,7 +396,7 @@ export async function saveProductAction(_prev: ActionState, data: FormData): Pro
     isFeatured: str(data, "isFeatured") === "on",
     isActive: str(data, "isActive") === "on",
   };
-  if (!payload.name || payload.classCount < 1 || payload.priceCents <= 0) {
+  if (!payload.name || payload.classCount < 1 || !(payload.priceCents > 0)) {
     return fail("Enter a name, class count and price.");
   }
   if (id) {
@@ -420,9 +422,11 @@ export async function toggleMemberAction(_prev: ActionState, data: FormData): Pr
 
 export async function grantCreditsAction(_prev: ActionState, data: FormData): Promise<ActionState> {
   const userId = num(data, "userId");
-  const credits = num(data, "credits");
+  const credits = num(data, "credits", 100);
   const note = str(data, "note");
   if (credits <= 0) return fail("Enter how many credits to grant.");
+  const [member] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+  if (!member) return fail("Member not found.");
   const [voucher] = await db
     .insert(vouchers)
     .values({
@@ -501,13 +505,15 @@ export async function announceClassTypeAction(_prev: ActionState, data: FormData
 }
 
 export async function expireStaleVouchersAction(): Promise<void> {
-  await db.execute(sql`
-    update vouchers set status = 'expired'
-    where expires_at < current_date and status <> 'expired'
-  `);
-  await db.execute(sql`
-    update vouchers set status = 'depleted'
-    where credits_remaining <= 0 and status = 'active'
-  `);
+  await runBatch([
+    sql`
+      update vouchers set status = 'expired'
+      where expires_at < ${todayISO()} and status <> 'expired'
+    `,
+    sql`
+      update vouchers set status = 'depleted'
+      where credits_remaining <= 0 and status = 'active'
+    `,
+  ]);
   refreshAll();
 }

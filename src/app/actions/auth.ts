@@ -1,8 +1,7 @@
 "use server";
 
 import { eq } from "drizzle-orm";
-import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
+import { redirect, revalidatePath, safeNext } from "@/lib/next";
 import { db } from "@/db";
 import { users } from "@/db/schema";
 import {
@@ -24,7 +23,7 @@ export async function registerAction(_prev: ActionState, data: FormData): Promis
   const email = str(data, "email").toLowerCase();
   const phone = str(data, "phone");
   const password = str(data, "password");
-  const next = str(data, "next") || "/dashboard";
+  const next = safeNext(str(data, "next"), "/dashboard");
 
   if (name.length < 2) return fail("Please enter your full name.");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail("Please enter a valid email address.");
@@ -35,7 +34,7 @@ export async function registerAction(_prev: ActionState, data: FormData): Promis
 
   const [created] = await db
     .insert(users)
-    .values({ name, email, phone: phone || null, passwordHash: hashPassword(password) })
+    .values({ name, email, phone: phone || null, passwordHash: await hashPassword(password) })
     .returning();
 
   await setSessionCookie(created.id);
@@ -55,14 +54,14 @@ export async function loginAction(_prev: ActionState, data: FormData): Promise<A
   const next = str(data, "next");
 
   const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (!user || !verifyPassword(password, user.passwordHash)) {
+  if (!user || !(await verifyPassword(password, user.passwordHash))) {
     return fail("Those credentials do not match our records.");
   }
   if (!user.isActive) return fail("This account has been deactivated. Please contact the studio.");
 
   await setSessionCookie(user.id);
   revalidatePath("/", "layout");
-  redirect(next || (user.role === "admin" ? "/admin" : "/dashboard"));
+  redirect(safeNext(next, user.role === "admin" ? "/admin" : "/dashboard"));
 }
 
 export async function logoutAction(): Promise<void> {
@@ -93,8 +92,8 @@ export async function changePasswordAction(
   if (!user) return fail("Please sign in first.");
   const current = str(data, "current");
   const next = str(data, "next");
-  if (!verifyPassword(current, user.passwordHash)) return fail("Current password is incorrect.");
+  if (!(await verifyPassword(current, user.passwordHash))) return fail("Current password is incorrect.");
   if (next.length < 6) return fail("New password must be at least 6 characters.");
-  await db.update(users).set({ passwordHash: hashPassword(next) }).where(eq(users.id, user.id));
+  await db.update(users).set({ passwordHash: await hashPassword(next) }).where(eq(users.id, user.id));
   return ok("Password changed.");
 }

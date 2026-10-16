@@ -1,9 +1,9 @@
-import Link from "next/link";
+import Link from "@/components/Link";
 import { and, asc, eq, gt } from "drizzle-orm";
 import { db } from "@/db";
 import { vouchers } from "@/db/schema";
 import { getCurrentUser } from "@/lib/auth";
-import { getTeachers, getRooms, getClassTypes, getWeekSessions, ensureSessionHorizon } from "@/lib/scheduling";
+import { getTeachers, getRooms, getClassTypes, getWeekSessions } from "@/lib/scheduling";
 import {
   addDaysISO,
   currentWeekStart,
@@ -26,7 +26,6 @@ type SearchParams = Promise<{
 
 export default async function TimetablePage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  await ensureSessionHorizon();
 
   const requested = isValidISODate(params.date) ? (params.date as string) : todayISO();
   const weekStart = startOfWeekISO(requested);

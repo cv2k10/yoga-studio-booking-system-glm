@@ -1,8 +1,10 @@
-import type { Metadata } from "next";
-import type { ReactNode } from "react";
-import Link from "next/link";
-import "./globals.css";
+import type { Metadata } from "@/lib/next";
+import type { ReactNode } from "@/lib/next";
+import Link from "@/components/Link";
+import { getContext } from "hono/context-storage";
+import { raw } from "hono/html";
 import { SiteHeader } from "@/components/SiteHeader";
+import type { AppEnv } from "@/env";
 
 export const metadata: Metadata = {
   title: "Sattva Studio · Yoga & Pilates booking",
@@ -10,11 +12,48 @@ export const metadata: Metadata = {
     "Book yoga and pilates classes at Sattva Studio: weekly timetable, class vouchers, teacher profiles and studio room views.",
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+// Disables the submit button while a form posts (showing its pending label)
+// and asks for confirmation on forms that declare data-confirm.
+const FORM_SCRIPT = `
+document.addEventListener("submit", function (event) {
+  var form = event.target;
+  var question = form.getAttribute("data-confirm");
+  if (question && !window.confirm(question)) { event.preventDefault(); return; }
+  var button = event.submitter || form.querySelector("button[type=submit]");
+  if (!button) return;
+  var pending = button.getAttribute("data-pending");
+  setTimeout(function () {
+    button.disabled = true;
+    if (pending) button.textContent = pending;
+  }, 0);
+});
+`;
+
+export default function RootLayout({ children, title }: { children: ReactNode; title?: string }) {
+  const flash = getContext<AppEnv>().var.flash;
   return (
     <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{title ?? metadata.title}</title>
+        <meta name="description" content={metadata.description} />
+        <link rel="stylesheet" href="/styles.css" />
+      </head>
       <body className="min-h-screen bg-sand text-ink antialiased">
         <SiteHeader />
+        {flash ? (
+          <div className="no-print mx-auto max-w-7xl px-4 pt-4 sm:px-6">
+            <p
+              className={`rounded-xl px-4 py-3 text-sm font-medium ${
+                flash.ok ? "bg-sage/12 text-sage" : "bg-clay/12 text-clay"
+              }`}
+              role="status"
+            >
+              {flash.message}
+            </p>
+          </div>
+        ) : null}
         <main className="min-h-[70vh]">{children}</main>
         <footer className="no-print mt-20 border-t border-ink/10 bg-white/60">
           <div className="mx-auto grid max-w-7xl gap-8 px-4 py-12 sm:px-6 md:grid-cols-4">
@@ -62,6 +101,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             notified in-app.
           </div>
         </footer>
+        <script>{raw(FORM_SCRIPT)}</script>
       </body>
     </html>
   );

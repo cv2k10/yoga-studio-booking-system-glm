@@ -1,5 +1,5 @@
-import Link from "next/link";
-import type { ReactNode } from "react";
+import Link from "@/components/Link";
+import type { ReactNode } from "@/lib/next";
 
 export const CATEGORY_STYLES: Record<string, { chip: string; dot: string; label: string }> = {
   yoga: { chip: "bg-sage/12 text-sage", dot: "bg-sage", label: "Yoga" },

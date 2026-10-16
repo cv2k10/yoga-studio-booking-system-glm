@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/Link";
 import {
   getClassTypes,
   getRooms,
@@ -6,7 +6,6 @@ import {
   getTeachers,
   getUpcomingSessions,
   getVoucherProducts,
-  ensureSessionHorizon,
 } from "@/lib/scheduling";
 import { Badge, CATEGORY_STYLES, SectionHeading } from "@/components/ui";
 import { formatMoney, formatRange, formatDateShort, todayISO } from "@/lib/dates";
@@ -17,7 +16,6 @@ const HERO_IMAGE =
   "https://images.pexels.com/photos/35215411/pexels-photo-35215411.jpeg?auto=compress&cs=tinysrgb&fit=crop&h=900&w=1600";
 
 export default async function HomePage() {
-  await ensureSessionHorizon();
   const [classTypes, teachers, rooms, products, upcoming] = await Promise.all([
     getClassTypes(),
     getTeachers(),
